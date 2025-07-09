@@ -18,16 +18,20 @@ package circuitbreaker
 
 import (
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp/reverseproxy"
 	"github.com/vulcand/oxy/memmetrics"
 )
 
 func init() {
 	caddy.RegisterModule(Simple{})
+	httpcaddyfile.RegisterDirective("circuit_breaker", parseCaddyfileCircuitBreaker)
 }
 
 // Simple implements circuit breaking functionality for
@@ -147,8 +151,57 @@ var typeCB = map[string]int32{
 	"status_ratio": factorStatusCodeRatio,
 }
 
+// UnmarshalCaddyfile implements caddyfile.Unmarshaler.
+func (c *Simple) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		for d.NextBlock(0) {
+			switch d.Val() {
+			case "threshold":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				val, err := strconv.ParseFloat(d.Val(), 64)
+				if err != nil {
+					return d.Errf("invalid threshold value: %v", err)
+				}
+				c.Threshold = val
+			case "factor":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				c.Factor = d.Val()
+			case "trip_duration":
+				if !d.NextArg() {
+					return d.ArgErr()
+				}
+				dur, err := time.ParseDuration(d.Val())
+				if err != nil {
+					return d.Errf("invalid trip_duration: %v", err)
+				}
+				c.TripDuration = caddy.Duration(dur)
+			default:
+				return d.Errf("unrecognized subdirective: %s", d.Val())
+			}
+		}
+	}
+	return nil
+}
+
+func parseCaddyfileCircuitBreaker(h httpcaddyfile.Helper) ([]httpcaddyfile.ConfigValue, error) {
+	var cb Simple
+	err := cb.UnmarshalCaddyfile(h.Dispenser)
+	if err != nil {
+		return nil, err
+	}
+	return []httpcaddyfile.ConfigValue{{
+		Class: "reverse_proxy.circuit_breakers",
+		Value: cb,
+	}}, nil
+}
+
 // Interface guards
 var (
 	_ caddy.Provisioner           = (*Simple)(nil)
 	_ reverseproxy.CircuitBreaker = (*Simple)(nil)
+	_ caddyfile.Unmarshaler       = (*Simple)(nil)
 )
